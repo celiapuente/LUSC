@@ -1,0 +1,384 @@
+---
+title: "Mutational Signature Analysis LUSC"
+output:
+  html_document:
+    df_print: paged
+---
+
+## 1. Exploring a cancer genomics data portal
+Our input data will be cancer sequencing data from the publicly available cBioPortal platform. In particular, we will analyze data from The Cancer Genome Atlas (TCGA) project. To focus on this particular project and, specifically, on the latest published results, you should search for “tcga lusc atlas” in the cBioPortal Query tab, as shown below.
+
+The goal is to identify the shared patterns of mutations for this specific cancer type, as well as the most common mutational signatures active.
+
+## 2 Input data reformatting
+
+Unfortunately, the MAF format used by cBioPortal is slightly different from the one developed by the National Cancer Institute, which is the default supported by the SigProfiler suite of tools. Considering this, we will reformat the file using the tidyverse collection of packages as follows:
+```{r}
+rm(list= ls())
+setwd("/Users/celiamp/Documents/SEMESTRE 4/cancer/cancer_genomics")
+# Load tidyverse collection of packages
+library(tidyverse)
+```
+
+```{r}
+# Read cBioPortal style MAF file
+maf_cbioportal = read.delim('data_mutations.txt')
+
+# Selection of specific columns needed by SigProfiler
+maf_sp = maf_cbioportal %>%
+  select(Hugo_Symbol, Entrez_Gene_Id, Center, NCBI_Build, Chromosome,
+         Start_Position, End_Position, Strand, Variant_Classification,
+         Variant_Type, Reference_Allele, Tumor_Seq_Allele1,
+         Tumor_Seq_Allele2, dbSNP_RS, dbSNP_Val_Status, Tumor_Sample_Barcode)
+
+# Filter for only considering single base substitutions
+maf_sp = maf_sp %>%
+    filter(Variant_Type == 'SNP')
+```
+
+We will also create a specific folder for all our signature analysis results, as well as a specific folder inside for the updated MAF file, as this is also required by the SigProfiler tools.
+```{r}
+# Create new folder for signature analysis results
+dir.create('signatures')
+
+# Create new folder for updated MAF file (needed for SigProfilerMatrixGenerator)
+dir.create('signatures/SPMG/') # Crea una subcarpeta dentro de signatures llamada SPMG
+
+# Write updated MAF file
+write.table(maf_sp, 'signatures/SPMG/data_mutations.maf', quote = F,
+            row.names = F, sep = '\t')
+
+```
+
+## 3. Generating mutational matrices
+
+Benefiting from the standard MAF format file we have generated, we can now use the SigProfilerMatrixGenerator package to manage this sequencing data. This package allows us to create a matrix classifying the mutations in the MAF file into the subtypes of interest. Mutational matrices are the first step for mutational signature analysis and correspond to a helpful data type, as they contain no protected information.
+
+In this case, we are going to focus on the SBS96 mutational context, which, as mentioned in the lecture, allows classifying single base substitutions in different categories based on the mutated nucleotide, as well as the immediately preceding and posterior nucleotides to the mutation (a.k.a. the 5’ and 3’ nucleotides from the mutation). Other contexts exist for single base substitutions, as well as additional variant types, such as doublet base substitutions (DBSs) or short insertions and deletions (indels; IDs).
+
+Although SigProfilerMatrixGenerator and the other SigProfiler tools that we will be using today have been developed in Python, there are R wrappers available. These make it easy to switch between the two different platforms. In the context of this course, we will use the R version of all SigProfiler tools (note the final R added to the name of the packages). 
+
+***Side-note: Although the SigProfiler suite of tools has already been pre-installed in the virtual machine for this course, if you are interested in applying mutational signature analysis in your own projects, please take a look at the optional section at the end of this document for installation instructions.***
+
+Before we begin: In order to install the SigProfiler suite of bioinformatics tools in your own computer, first, you will need to install the Miniconda package manager, which is highly recommended for python users and can also be used to manage your R dependencies. Miniconda philosophy is built around conda environments, which correspond to closed containers where all the versions of the different python/R packages are fixed. This structure highly benefits the reproducibility of the code, as each analysis can be done with an exclusively dedicated environment, which will not change any dependency version, even though the general python installation of the computer or a particular package is updated. Please note that Miniconda installation differs between macOS and Windows users.
+
+```{r}
+# Install Miniconda (more info here: https://docs.conda.io/projects/miniconda/en/latest/)
+
+## macOS (Apple M1)
+# system('wget https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh')
+# system('bash Miniconda3-latest-MacOSX-arm64.sh')
+
+# The lines are commented out because we wasn’t able to do it this way. Below is how we did it instead
+```
+
+Before we begin, we’ll install the Miniconda package manager using `curl` instead of `wget`.
+
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+
+Once the installer has been downloaded, we run: Miniconda3-latest-MacOSX-arm64.sh
+
+This will start the Miniconda installation process. During the installation:
+
+We accept the license agreement by typing yes when prompted.
+We choose the installation directory. For example:
+
+Miniconda3 will now be installed into this location:
+/Users/our-username/miniconda3
+
+If prompted, we allow the installer to modify our .zshrc file so that conda is automatically activated whenever we open a new terminal session.
+
+After downloading and installing miniconda, we are going to create a new environment that we will call mutational_signatures, and then we will install python 3.10 inside the environment.
+
+```{r}
+# Install python ( macOS )
+
+## Define nombre del entorno
+new_environment_name = 'mutational_signatures'
+
+## Define el path donde está instalado Miniconda
+path_of_miniconda = '/Users/celiamp/miniconda3' 
+
+## Construye el path completo al ejecutable de conda
+path_of_conda = paste0(path_of_miniconda, '/bin/conda')
+
+## Crea un entorno conda llamado 'mutational_signatures'
+system(paste0(path_of_conda, ' create --name ', new_environment_name, ' -y'))
+
+## Instala Python 3.10 en ese entorno
+system(paste0(path_of_conda, ' install -n ', new_environment_name, ' python=3.10 -y'))
+```
+
+```{r}
+# Install SigProfilerExtractor python package (also installs SigProfilerMatrixGenerator,
+# SigProfilerPlotting, and SigProfilerAssignment automatically) -> macOS
+system(paste0(path_of_miniconda, '/envs/', new_environment_name,
+              '/bin/pip install SigProfilerExtractor'))
+```
+Lastly, we will install all the R packages needed, including reticulate, which is required to use python packages in R; devtools, which is needed to install other packages directly from GitHub; and all the R wrappers for the different SigProfiler tools.
+```{r}
+# Install reticulate (package connecting python & R)
+if (!require("reticulate")){
+    install.packages("reticulate")
+}
+
+# Install R wrapper (SigProfilerAssignmentR)
+if (!require("devtools")){
+    install.packages("devtools")
+}
+
+# Install SigProfiler tools and additional utilities
+if (!require("SigProfilerMatrixGeneratorR")){
+    devtools::install_github("AlexandrovLab/SigProfilerMatrixGeneratorR")
+}
+
+if (!require("SigProfilerAssignmentR")){
+    devtools::install_github("AlexandrovLab/SigProfilerAssignmentR")
+}
+
+if (!require("SigProfilerExtractorR")){
+    devtools::install_github("AlexandrovLab/SigProfilerExtractorR")
+}
+
+if (!require("SigProfilerPlottingR")){
+    devtools::install_github("AlexandrovLab/SigProfilerPlottingR")
+}
+```
+
+```{r}
+# Load reticulate library (for using python packages in R)
+library(reticulate)
+
+# Fixing conda environment (check optional section for details)
+use_condaenv('mutational_signatures')
+
+# Load R wrapper package for SigProfilerMatrixGenerator
+library(SigProfilerMatrixGeneratorR)
+```
+
+The first step to run SigProfilerMatrixGenerator is installing a reference genome, that should match the one used for the alignment of the next generation sequencing data. We have already preinstalled human reference genomes GRCh37 and GRCh38 in the virtual machines, but in case you need to install these genomes (or different ones) on a different computer you can follow the code below:
+```{r}
+# Install reference genome (only required once, previously done in the VM)
+install('GRCh37', rsync=FALSE, bash=TRUE)
+```
+
+In order to run SigProfilerMatrixGenerator for the Lung Squamous Cell Carcinoma from the TCGA project available in cBioPortal you can use the following:
+
+```{r}
+# Generate mutational profiles analysis using SigProfilerMatrixGenerator
+matrices <- SigProfilerMatrixGeneratorR(project = "LUSC",
+                                        genome = "GRCh37",
+                                        matrix_path = "./signatures/SPMG",
+                                        plot = F,
+                                        exome = T)
+```
+
+## 4. Visualizing mutational profiles
+
+For the visualization of SBS96 mutational profiles, we will make use of the SigProfilerPlotting tool. To generate mutational profile plots, we will use the previously generated mutational matrices as input.
+
+***Side-note: Although SigProfilerMatrixGenertor also allows users to directly generate mutational profile plots, this is quite time consuming, as plots are generated for every different SBS classification (as well as for every sample).***
+
+```{r}
+library(SigProfilerPlottingR)
+plotSBS(matrix_path = 'signatures/SPMG/output/SBS/LUSC.SBS96.exome',
+        output_path = 'signatures/SPMG/output/SBS/',
+        project = 'LUSC',
+        plot_type = '96',
+        percentage = FALSE)
+
+```
+
+The file name containing the mutational profiles for all samples is: **SBS_96_plots_LUSC.pdf**
+
+## 4.1 Average mutational profiles
+
+To get an idea of the overall patterns of mutations in the whole cohort, it is useful to generate the average mutational profile of all samples. To do this, it’s important to keep in mind that we need to first obtain the relative mutational matrix, using percentages instead of absolute values. This step is required to avoid samples with high numbers of mutations to bias the average mutational profile.
+
+```{r}
+# Extraer matriz SBS96 (para LUSC)
+mut_matrix = matrices[['96']]
+
+# Calcular proporciones por muestra
+relative_mut_matrix = apply(mut_matrix, 2, prop.table)
+
+# Calcular promedio por tipo de mutación
+average_mut_matrix = rowMeans(relative_mut_matrix)
+average_mut_matrix = data.frame(Average_LUSC = average_mut_matrix)
+
+# Preparar tabla para guardar
+average_mut_matrix_to_print = cbind(rownames(average_mut_matrix),
+                                    average_mut_matrix)
+colnames(average_mut_matrix_to_print)[1] = 'MutationType'
+
+# Guardar el perfil mutacional promedio
+write.table(average_mut_matrix_to_print, 'signatures/avg_LUSC.SBS96.all',
+            quote = F, row.names = F, sep = '\t')
+
+# Graficar perfil promedio (en porcentaje)
+plotSBS(matrix_path = 'signatures/avg_LUSC.SBS96.all',
+        output_path = 'signatures/',
+        project = 'avg_LUSC',
+        plot_type = '96',
+        percentage = TRUE)
+```
+
+
+The file name containing the average mutational profiles is: **SBS_96_plots_avg_LUSC.pdf**
+
+
+## 4.2 Average mutational profiles per subgroup
+
+```{r}
+setwd("/Users/celiamp/Documents/SEMESTRE 4/cancer/cancer_genomics")
+
+# Read clinical file with metadata
+metadata = read.delim('lusc_tcga_pan_can_atlas_2018_clinical_data.tsv')
+
+# Filtering metadata file to use only samples where we have mutation information
+metadata = metadata %>%
+    filter(Sample.ID %in% maf_sp$Tumor_Sample_Barcode)
+```
+
+## 5. Extracting mutational signatures
+
+In order to perform extraction of mutational signatures, we are going to use SigProfilerExtractor, the associated tool from the SigProfiler suite. We will use it to extract de novo mutational signatures from a set of samples and decompose the de novo extracted signatures into COSMIC reference signatures.
+
+```{r}
+library(SigProfilerExtractorR)
+```
+
+To run SigProfilerExtractor in our LUSC cancer cohort you can use the code below:
+
+Side-note: We are setting nmf_replicates = 3 and maximum_signatures = 3 to decrease how long the command takes to run. For accurate results, you will need to increase those parameters (e.g., the default and recommended values are nmf_replicates = 100 and maximum_signatures = 25). In particular, the maximum number of signatures will be dependent of the total number of samples in the cohort, and the average number of mutations per sample.
+```{r}
+sigprofilerextractor( input_type = 'matrix',
+                      output = 'signatures/SPE/',
+                      input_data = 'signatures/SPMG/output/SBS/LUSC.SBS96.exome',
+                      nmf_replicates = 100,
+                      minimum_signatures = 1,
+                      maximum_signatures = 25,
+                      exome = T)
+```
+
+
+
+## 6. Assigning reference mutational signatures
+
+Leveraging the COSMIC mutational signatures, we will perform a mutational signature assignment analysis to quantify the number of mutations contributed by each signature to a given cancer sample and, therefore, decipher which mutational processes have been active in each individual tumor. To do this, we will make use of SigProfilerAssignment, the most recent tool of the SigProfiler suite.
+
+To assign reference signatures to individual samples using SigProfilerAssignment, you can use the code below:
+
+```{r}
+# Load library
+library(SigProfilerAssignmentR)
+
+# Run assignment analysis
+cosmic_fit(samples = 'signatures/SPMG/output/SBS/LUSC.SBS96.exome',
+           output = 'signatures/SPA',
+           input_type='matrix',
+           exome = T)
+```
+
+
+## 7. Downstream analysis of signature assignment results
+
+### 7.1 Assessing the accuracy of the signature activities
+
+Assigning mutational signatures is a mathematical optimization problem, which consists in obtaining the best combination of reference signatures that better reconstruct the original mutational profile. Considering this, it is a good practice to check how good is this reconstruction, because it can happen that even if the method tries to optimize the reconstruction, this is still not good enough. Different similarity measures can be used to check this. The most common in the mutational signatures field is the cosine similarity, although others such as correlation, L1/L2 norm, or KL divergence can be used. A cosine similarity above 0.90 commonly indicates a good reconstruction.
+
+To check the cosine similarity of the reconstruction for some specific samples, we can check the Assignment_Solution_Samples_Stats.txt file, which is inside the directory data/SPA/Assignment_Solution/Solution_Stats. We can do that in R, and generate some useful visualizations:
+
+```{r}
+stats = read.delim('signatures/SPA/Assignment_Solution/Solution_Stats/Assignment_Solution_Samples_Stats.txt')
+
+ggplot(stats) +
+    aes(x=Cosine.Similarity) +
+    labs(x='')+
+    geom_histogram(aes(y = after_stat(density))) +
+    geom_density(col = 4, lwd = 1.5) +
+    geom_vline(aes(xintercept = 0.9),
+               col = 2, lwd = 1.5) +
+    labs(x = 'Cosine Similarity') +
+    theme_bw()
+
+```
+
+
+### 7.2 Visualizing signature activities from SigProfilerAssignment 
+
+To visualize the mutational signature assignment results, we will check the plots provided by SigProfilerAssignment (available at signatures/SPA/Assignment_Solution/Activities/Assignment_Solution_TMB_plot.pdf).
+
+
+### 7.3 Visualizing signature activities from SigProfilerExtractor
+
+Considering what we discussed, we are going to analyze a bit more in detail the signature activities provided by SigProfilerExtractor. It’s important to keep in mind that SigProfilerExtractor is running SigProfilerAssignment automatically for us. However, in this case, the assignment of signatures to samples is done using the de novo extracted signatures, as well as the COSMIC decomposition of these de novo signatures.
+
+We can start by reviewing a similar TMB plot, which now looks quite different.
+
+We will now generate custom visualizations using ggplot2 and the activities output matrix from the mutational signature assignment analysis.
+
+```{r}
+# Read activities matrix
+acts = read.delim('signatures/SPE/SBS96/Suggested_Solution/COSMIC_SBS96_Decomposed_Solution/Activities/COSMIC_SBS96_Activities.txt')
+```
+We can first calculate and plot the average number of mutations contributed by every signatures across the cohort of 528 samples.
+```{r}
+# Calculate average activities per signature
+avg_acts = colMeans(acts[,-1])
+avg_acts
+```
+
+```{r}
+# Visualize average activities per signature
+barplot(avg_acts)
+```
+
+We can also plot the activities for every sample. In this case we are going to plot the relative activities. If we want to plot the absolute activites we need to change the position parameter in geom_bar to position=stack.
+
+
+```{r}
+# Reformat dataframe to use ggplot
+# (more info here: https://tidyr.tidyverse.org/reference/pivot_longer.html)
+acts_tidy = acts %>%
+    pivot_longer(cols = !Samples,
+                 names_to = 'Signature',
+                 values_to = 'Mutations')
+
+# Generate stacked barplot (percent stacked)
+ggplot(acts_tidy) +
+    aes(x = Samples, y = Mutations, fill = Signature) +
+    geom_bar(position = 'fill', stat = 'identity') +
+    theme_bw() +
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x=element_blank())
+```
+
+Since we have a lot of samples, the plot above is quite messy and not very useful. We will group the samples according to the metadata groups in the next section, but for now we can plot for example the 10 most mutated cases.
+
+```{r}
+# Calculate number of mutations per sample
+number_of_mutations = rowSums(acts[,-1])
+
+# Selecting the activities of only the top 10 mutated cases
+top_10_mutated_samples = acts[order(number_of_mutations,
+                                    decreasing = T)[1:10],]
+
+# Reformatting and plotting
+top_10_mutated_samples %>%
+     pivot_longer(cols = !Samples,
+                 names_to = 'Signature',
+                 values_to = 'Mutations') %>%
+    ggplot() +
+    aes(x = reorder(Samples, Mutations), y = Mutations, fill = Signature) +
+    geom_bar(position = 'fill', stat = 'identity') +
+    theme_bw() +
+    labs(x = 'Samples')  +
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x=element_blank())
+```
+
+
+

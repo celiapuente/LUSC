@@ -1,0 +1,137 @@
+---
+title: "Proyecto_maftools"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Reading MAF files into maftools
+
+```{r}
+# Set the directory were we will be working.
+setwd("/Users/celiamp/Documents/SEMESTRE 4/cancer/cancer_genomics")
+library(maftools)
+
+LUSC = read.maf(maf = "data_mutations.txt")
+```
+Reminder: While reading the MAF file you can notice that in the console some information about the data is being displayed. This includes information about the number of silent variants in the data, genes with possible flags and, in our case, it states that we have not included clinical data.
+
+## Creating an oncoplot
+```{r}
+oncoplot(maf= LUSC)
+```
+
+As you can see, with this simple command you can get an oncoplot displaying 20 genes.
+With the default parameters the oncoplot will also show the percentage of samples in the cohort that have alterations in the shown genes, as well as the type of mutations affecting the gene through a code of colors.
+In this plot we can see that we have more Missense_Mutation.
+
+
+
+
+
+### Comparison of genes detected by dndscv vs. the most mutated genes identified by maftools
+
+```{r echo=FALSE, results='asis'}
+knitr::kable(
+  data.frame(
+    Gene = c("TP53", "KMT2D", "PIK3CA", "CDKN2A", "PTEN", "RB1", "KEAP1", "FAT1", "NOTCH1", "CSMD3", "TTN", "MUC16"),
+    En_dndscv = c("✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "❌", "❌", "❌"),
+    En_maftools = c("✅", "✅", "❌", "❌", "❌", "❌", "❌", "❌", "❌", "✅", "✅", "✅")
+  ),
+  caption = "Comparison of genes between dndscv (drivers) and maftools (most mutated)"
+)
+```
+
+We can change the number of genes displayed with the option "top".
+For example, if we want to show 30 genes we can type the following.
+```{r}
+oncoplot(maf=LUSC, top=30)
+```
+
+
+Or if we want to only display 10 genes we just type:
+```{r}
+oncoplot(maf=LUSC, top=10)
+```
+
+As you may have noticed, the genes shown are selected only considering the number of mutations affecting them, and the size or composition of these genes is not taken into account. (as we mentioned before)
+
+For example the TTN gene (polymorphic gene) is a very large gene. Because of its size it is expected to have a higher amount of mutations affecting it. Therefore it may not be relevant to this type of cancer. If you return to the information displayed when reading the maf file you can also see that the TTN gene was one of the genes with possible flags.
+
+You can customize you oncoplot taking this type of considerations. For example lets try to exclude the TTN gene from our oncoplot.
+```{r}
+oncoplot(LUSC, genesToIgnore = c("TTN"))
+```
+
+Now that we have used dndscv to identify driver genes, we can also select those genes to generate a specific oncoplot with them.
+Let's try to generate an oncoplot with 5 significant genes we identified with dndscv.
+```{r}
+oncoplot(LUSC, genes = c("TP53","CDKN2A","KMT2D","NFE2L2","RB1"))
+```
+
+
+```{r}
+oncoplot(LUSC, genes = c("KMT2D","CDKN2A"))
+```
+
+
+## Adding annotations
+
+We can also add other annotations to our oncoplots, such as transitions and transvertions. We can add this information like this:
+
+```{r}
+oncoplot(LUSC, genes = c("TP53","CDKN2A","KMT2D","NFE2L2","RB1"), draw_titv
+= TRUE)
+```
+
+Being able to visualize transitions and transvertions can help us indetify certain patterns that could be related to a specific source of DNA damage. We can also use the annotations of the variant classification that is displayed by default to identify oncogenes and tumor suppressors. 
+
+Depending on your cohort, it can also be useful to have the IDs of the samples on the plot. You can add them with the option "showTumorSampleBarcodes".
+```{r}
+oncoplot(LUSC, genes = c("TP53","CDKN2A","KMT2D","NFE2L2","RB1"), draw_titv = TRUE, showTumorSampleBarcodes=TRUE)
+```
+
+## Adding pathways
+
+
+```{r}
+# oncoplot(maf=LUSC, pathways= 'auto', gene_mar =5, fontSize =0.3)
+
+oncoplot(maf = LUSC, pathways = 'sigpw', gene_mar = 5, fontSize = 0.3)
+
+```
+
+
+
+## Other maftools plots
+
+Maftools can generate other useful plots. For example it can plot a summary of all variants, showing variants per sample, variant type and classification.
+Use the next command to get the summary plot.
+```{r}
+plotmafSummary(maf=LUSC, addStat = 'median', dashboard = TRUE)
+```
+
+
+We can also generate a specific plot for transitions and transvertions. To do so, we first get the transition and transvertion data with "titv" and then plot it with "plotTiTv".
+
+```{r}
+LUSC_titv = titv(maf = LUSC, plot=FALSE)
+plotTiTv(res=LUSC_titv)
+```
+
+Another plot that we can create is a lollipop plot. This plot shows the positions and amino acid changes that are caused in the protein by the mutations present. You can create this type of plot for your protein of interest with the following command:
+
+```{r}
+#We will use TP53 as an example
+lollipopPlot(maf=LUSC, gene="TP53", showMutationRate=TRUE)
+```
+
+You can label the changes by using the option "labelPos" and stating the position of the change you would like to annotate.
+
+```{r}
+#Here, we will label teh change in the position 209.
+lollipopPlot(maf=LUSC, gene="TP53", showMutationRate=TRUE,refSeqID = "NM_001126116", labelPos=32)
+```
+
+An important thing to consider for these plots is that to be able to create them, you need the information of the change of amino acid to be included in your maf file. As well, the name of the column for this information can vary between maf files. By default maftools will look for the name "AAChange". If the column has another name, you should use the option "AACol" to state the name used in your maf file.
+
